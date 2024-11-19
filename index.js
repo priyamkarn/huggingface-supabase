@@ -1,77 +1,158 @@
+const dotenv = require('dotenv');
+const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 
-// Your Hugging Face API key (replace with your actual key)
-const API_KEY = 'api key';
-
-// Function to get embeddings and similarities from Hugging Face
-async function getEmbeddings(texts) {
-  const url = 'https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2';
+// Function to setup environment file
+async function setupEnvironment() {
+  const envContent = `
+HUGGING_FACE_TOKEN=''
+SUPABASE_URL=''
+SUPABASE_KEY=''
 
   try {
-    const response = await axios.post(url, {
-      inputs: {
-        source_sentence: texts[0],
-        sentences: texts.slice(1)
-      }
-    }, {
-      headers: {
-        'Authorization': `Bearer ${API_KEY}`,
-        'Content-Type': 'application/json',
+    await fs.promises.writeFile('.env', envContent);
+    console.log('Created .env file successfully');
+  } catch (error) {
+    console.error('Error creating .env file:', error);
+    process.exit(1);
+  }
+}
+
+// Load environment variables
+function loadEnvironment() {
+  const result = dotenv.config();
+  if (result.error) {
+    console.error('Error loading .env file:', result.error);
+    process.exit(1);
+  }
+}
+
+// Initialize Supabase client
+function initializeSupabase() {
+  return createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_KEY
+  );
+}
+
+// Test table by inserting and retrieving a record
+async function testEmbeddingsTable(supabase) {
+  try {
+    // Insert a test record
+    const testData = {
+      text: 'test embedding',
+      embedding: Array(384).fill(0)
+    };
+
+    const { error: insertError } = await supabase
+      .from('embeddings')
+      .insert([testData]);
+
+    if (insertError) {
+      console.error('Error inserting test record:', insertError);
+      return false;
+    }
+
+    // Try to retrieve the record
+    const { data, error: selectError } = await supabase
+      .from('embeddings')
+      .select('*')
+      .limit(1);
+
+    if (selectError) {
+      console.error('Error retrieving test record:', selectError);
+      return false;
+    }
+
+    console.log('Successfully tested embeddings table');
+    return true;
+  } catch (error) {
+    console.error('Error testing embeddings table:', error);
+    return false;
+  }
+}
+
+// Test Supabase connection
+async function testSupabaseConnection(supabase) {
+  try {
+    const tableWorks = await testEmbeddingsTable(supabase);
+    if (!tableWorks) {
+      throw new Error('Failed to verify embeddings table functionality');
+    }
+
+    console.log('Successfully connected to Supabase');
+    return true;
+  } catch (error) {
+    console.error('Supabase connection error:', error.message);
+    return false;
+  }
+}
+
+// Test Hugging Face connection
+async function testHuggingFaceConnection() {
+  try {
+    const response = await axios.post(
+      'https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2',
+      {
+        inputs: {
+          source_sentence: "Test connection",
+          sentences: ["Another test"]
+        }
       },
-    });
-
-    return response.data;
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.HUGGING_FACE_TOKEN}`
+        }
+      }
+    );
+    console.log('Successfully connected to Hugging Face API');
+    return true;
   } catch (error) {
-    console.error('Error getting embeddings from Hugging Face:', 
-      error.response?.data || error.message);
-    throw error;
+    console.error('Hugging Face API error:', error.response?.data || error.message);
+    return false;
   }
 }
 
-// Function to make a query and check similarity
-async function querySimilarity(query, compareTexts) {
+// Main setup and test function
+async function setupAndTest() {
   try {
-    const allTexts = [query, ...compareTexts];
-    const similarities = await getEmbeddings(allTexts);
+    await setupEnvironment();
+    loadEnvironment();
 
-    // Format and display results
-    console.log('\n=== Similarity Results ===');
-    console.log(`Query: "${query}"\n`);
+    const supabase = initializeSupabase();
     
-    compareTexts.forEach((text, index) => {
-      const similarityScore = similarities[index];
-      const percentage = (similarityScore * 100).toFixed(2);
-      console.log(`Compared to: "${text}"`);
-      console.log(`Similarity: ${percentage}%\n`);
-    });
+    console.log('\nTesting connections...');
+    const [supabaseConnected, huggingFaceConnected] = await Promise.all([
+      testSupabaseConnection(supabase),
+      testHuggingFaceConnection()
+    ]);
 
+    if (supabaseConnected && huggingFaceConnected) {
+      console.log('\nAll connections successful! Your environment is ready to use.');
+      return true;
+    } else {
+      console.log('\nSome connections failed. Please check the error messages above.');
+      return false;
+    }
   } catch (error) {
-    console.error('Failed to get similarity scores:', error);
+    console.error('Setup failed:', error);
+    return false;
   }
 }
 
-// Example usage
-async function main() {
-  // Test set 1: Original examples
-  const texts = [
-    "Hello world",
-    "Machine learning is fascinating",
-    "PGVector is a great extension for PostgreSQL"
-  ];
-
-  console.log('Test Set 1: Original Examples');
-  await querySimilarity(texts[0], texts.slice(1));
-
-  // Test set 2: More related sentences
-  const relatedTexts = [
-    "What is machine learning?",
-    "Machine learning is AI technology",
-    "Deep learning is a subset of machine learning",
-    "Natural language processing uses machine learning"
-  ];
-
-  console.log('\nTest Set 2: Machine Learning Related Sentences');
-  await querySimilarity(relatedTexts[0], relatedTexts.slice(1));
+// Run setup and tests
+if (require.main === module) {
+  setupAndTest().then(success => {
+    if (!success) {
+      process.exit(1);
+    }
+  });
 }
 
-main();
+module.exports = {
+  setupAndTest,
+  initializeSupabase,
+  testSupabaseConnection,
+  testHuggingFaceConnection
+};
